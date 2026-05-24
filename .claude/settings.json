@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tfsec:*)",
+      "Bash(terraform fmt:*)",
+      "Bash(terraform validate:*)",
+      "Bash(terraform init:*)",
+      "Bash(node mcp-servers/azure-tf-advisor/dist/index.js:*)",
+      "Bash(npm --prefix mcp-servers/azure-tf-advisor:*)"
+    ]
+  },
+  "mcpServers": {
+    "azure-tf-advisor": {
+      "command": "node",
+      "args": ["./mcp-servers/azure-tf-advisor/dist/index.js"],
+      "type": "stdio"
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"try{const i=JSON.parse(process.env.CLAUDE_TOOL_INPUT||'{}');const fp=i.file_path||'';if(fp.endsWith('.tf')){const {execSync}=require('child_process');const dir=require('path').dirname(fp);try{const r=execSync('tfsec '+JSON.stringify(dir)+' --format=text --no-colour --minimum-severity=HIGH 2>&1',{encoding:'utf8',maxBuffer:1024*1024});if(r.trim()){console.log('--- tfsec (HIGH+) ---');console.log(r.slice(0,3000));}}catch(e){if(e.stdout&&e.stdout.trim()){console.log('--- tfsec (HIGH+) ---');console.log(e.stdout.slice(0,3000));}}}}catch(e){}\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -252,6 +252,55 @@ The tfstate storage account must have:
 
 ---
 
+## Managed Identity Permissions
+
+Every resource with a managed identity that accesses another Azure resource MUST have `azurerm_role_assignment` resources wiring them together. **Never assume a resource can access another without an explicit role assignment in Terraform.**
+
+### When to add permissions
+
+Add role assignments whenever:
+- An app setting or Key Vault reference points to a Key Vault
+- A Function App has a storage account (three roles always required for the runtime)
+- An AKS cluster pulls images from a Container Registry
+- SQL Server auditing writes to a Storage Account
+- Any compute resource reads/writes data from Storage, Service Bus, or Event Hub
+
+### How to generate them
+
+Use `get_required_permissions` from the MCP server to get the exact HCL. Pass the consumer type/name and the target type/name. The tool returns ready-to-paste `azurerm_role_assignment` blocks.
+
+Run `/tf-permissions` to audit an entire directory and generate all missing assignments at once.
+
+### Common patterns
+
+| Consumer | Target | Role(s) | Notes |
+|---|---|---|---|
+| App Service | Key Vault | `Key Vault Secrets User` | Required for Key Vault references in app settings |
+| Function App | Storage Account | `Storage Blob Data Contributor` + `Storage Queue Data Contributor` + `Storage Table Data Contributor` | **All three required** for Functions runtime |
+| Function App | Key Vault | `Key Vault Secrets User` | Required for Key Vault app setting references |
+| AKS | Container Registry | `AcrPull` | **Use `kubelet_identity[0].object_id`** not `identity[0].principal_id` |
+| AKS | VNet | `Network Contributor` | Required for Azure CNI |
+| SQL Server | Storage Account | `Storage Blob Data Contributor` | Required for extended auditing and vulnerability assessment |
+| Data Factory | Key Vault | `Key Vault Secrets User` | Required for linked service credentials |
+| App Service / Function | Service Bus | `Azure Service Bus Data Sender/Receiver` | Use namespace scope |
+| App Service / Function | Event Hub | `Azure Event Hubs Data Sender/Receiver` | Use namespace scope |
+
+### SQL Server access (not RBAC)
+
+SQL database access is **not** controlled via `azurerm_role_assignment`. Instead:
+1. Add the managed identity to an Entra group
+2. Grant the Entra group access in the database:
+   ```sql
+   CREATE USER [<entra-group-name>] FROM EXTERNAL PROVIDER;
+   ALTER ROLE db_datareader ADD MEMBER [<entra-group-name>];
+   ```
+
+### Keep permissions in a dedicated file
+
+Store all `azurerm_role_assignment` resources in `permissions.tf` — separate from the resource definitions. This makes it easy to audit access at a glance.
+
+---
+
 ## MCP Server Usage
 
 The `azure-tf-advisor` MCP server is available for all team members. Use its tools on every task:
@@ -262,6 +311,7 @@ The `azure-tf-advisor` MCP server is available for all team members. Use its too
 | `validate_azure_naming` | Before finalising any resource name |
 | `validate_required_tags` | After writing any resource block to verify tag compliance |
 | `tfsec_scan` | After writing or editing Terraform files — fix CRITICAL/HIGH before finishing |
+| `get_required_permissions` | Whenever a resource needs to access another — pass consumer type/name and target type/name to get exact role assignment HCL |
 
 ---
 

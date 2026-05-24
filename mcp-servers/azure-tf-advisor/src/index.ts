@@ -482,6 +482,180 @@ resource "azurerm_monitor_diagnostic_setting" "acr" {
 }`,
 };
 
+// ─── Permission Patterns ──────────────────────────────────────────────────────
+
+interface RoleEntry {
+  role: string;
+  principalRef: string; // CONSUMER = Terraform resource name placeholder
+  scopeRef: string;     // TARGET  = Terraform resource name placeholder
+  description: string;
+  required?: boolean;   // true = host/runtime will fail without this
+}
+
+interface PermissionPattern {
+  read: RoleEntry[];
+  write: RoleEntry[];
+  notes?: string;
+}
+
+// Windows variants share patterns with their Linux counterparts
+const CONSUMER_ALIASES: Record<string, string> = {
+  azurerm_windows_web_app:       "azurerm_linux_web_app",
+  azurerm_windows_function_app:  "azurerm_linux_function_app",
+  azurerm_windows_virtual_machine: "azurerm_linux_virtual_machine",
+};
+
+const PERMISSION_PATTERNS: Record<string, Record<string, PermissionPattern>> = {
+  azurerm_linux_web_app: {
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Secrets User", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Read secrets referenced in app settings", required: true }],
+      write: [{ role: "Key Vault Secrets Officer", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Create and update secrets" }],
+    },
+    azurerm_storage_account: {
+      read: [{ role: "Storage Blob Data Reader", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read blobs from storage" }],
+      write: [{ role: "Storage Blob Data Contributor", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read and write blobs" }],
+    },
+    azurerm_servicebus_namespace: {
+      read: [{ role: "Azure Service Bus Data Receiver", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Receive messages from Service Bus" }],
+      write: [
+        { role: "Azure Service Bus Data Sender",   principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Send messages to Service Bus" },
+        { role: "Azure Service Bus Data Receiver", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Receive messages from Service Bus" },
+      ],
+    },
+    azurerm_eventhub_namespace: {
+      read: [{ role: "Azure Event Hubs Data Receiver", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Receive events from Event Hub" }],
+      write: [
+        { role: "Azure Event Hubs Data Sender",   principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Send events" },
+        { role: "Azure Event Hubs Data Receiver", principalRef: "azurerm_linux_web_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Receive events" },
+      ],
+    },
+    azurerm_mssql_server: {
+      read: [],
+      write: [],
+      notes: "SQL Server access is not controlled via Azure RBAC role assignments. Instead, create an Entra group, add the app's managed identity to it, then run: CREATE USER [<mi-name>] FROM EXTERNAL PROVIDER; ALTER ROLE db_datareader ADD MEMBER [<mi-name>];",
+    },
+  },
+
+  azurerm_linux_function_app: {
+    azurerm_storage_account: {
+      read: [
+        { role: "Storage Blob Data Contributor",  principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Functions runtime: blob triggers and durable state", required: true },
+        { role: "Storage Queue Data Contributor", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Functions runtime: queue triggers and scale controller", required: true },
+        { role: "Storage Table Data Contributor", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Functions runtime: durable functions state store", required: true },
+      ],
+      write: [
+        { role: "Storage Blob Data Contributor",  principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Functions runtime (required)", required: true },
+        { role: "Storage Queue Data Contributor", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Functions runtime (required)", required: true },
+        { role: "Storage Table Data Contributor", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Functions runtime (required)", required: true },
+      ],
+      notes: "All three storage roles are REQUIRED when using managed identity for the Functions storage account. Missing any one will prevent the function host from starting.",
+    },
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Secrets User", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Read secrets used in app settings / Key Vault references", required: true }],
+      write: [{ role: "Key Vault Secrets Officer", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Create and update secrets" }],
+    },
+    azurerm_servicebus_namespace: {
+      read: [{ role: "Azure Service Bus Data Receiver", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Service Bus trigger binding" }],
+      write: [
+        { role: "Azure Service Bus Data Sender",   principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Send output binding" },
+        { role: "Azure Service Bus Data Receiver", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Receive trigger binding" },
+      ],
+    },
+    azurerm_eventhub_namespace: {
+      read: [{ role: "Azure Event Hubs Data Receiver", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Event Hub trigger binding" }],
+      write: [
+        { role: "Azure Event Hubs Data Sender",   principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Send output binding" },
+        { role: "Azure Event Hubs Data Receiver", principalRef: "azurerm_linux_function_app.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Receive trigger binding" },
+      ],
+    },
+  },
+
+  azurerm_kubernetes_cluster: {
+    azurerm_container_registry: {
+      read: [{ role: "AcrPull", principalRef: "azurerm_kubernetes_cluster.CONSUMER.kubelet_identity[0].object_id", scopeRef: "azurerm_container_registry.TARGET.id", description: "Pull images from ACR (assigned to kubelet identity, not cluster identity)", required: true }],
+      write: [{ role: "AcrPush", principalRef: "azurerm_kubernetes_cluster.CONSUMER.kubelet_identity[0].object_id", scopeRef: "azurerm_container_registry.TARGET.id", description: "Push and pull images" }],
+      notes: "Always use kubelet_identity[0].object_id — NOT identity[0].principal_id. The kubelet is what pulls images on each node. Using the wrong identity is a very common mistake.",
+    },
+    azurerm_virtual_network: {
+      read: [{ role: "Network Contributor", principalRef: "azurerm_kubernetes_cluster.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_virtual_network.TARGET.id", description: "Azure CNI: manage IP allocations in the VNet", required: true }],
+      write: [{ role: "Network Contributor", principalRef: "azurerm_kubernetes_cluster.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_virtual_network.TARGET.id", description: "Azure CNI networking", required: true }],
+      notes: "For least privilege, scope to the subnet instead: azurerm_subnet.TARGET.id",
+    },
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Secrets User", principalRef: "azurerm_kubernetes_cluster.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "CSI Secret Store driver: mount secrets as volumes", required: true }],
+      write: [{ role: "Key Vault Secrets Officer", principalRef: "azurerm_kubernetes_cluster.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Write secrets via workload identity" }],
+      notes: "For workload identity scenarios, assign the role to the pod's user-assigned identity instead of the cluster identity.",
+    },
+  },
+
+  azurerm_mssql_server: {
+    azurerm_storage_account: {
+      read: [{ role: "Storage Blob Data Contributor", principalRef: "azurerm_mssql_server.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Write audit logs and vulnerability assessment results to blob storage", required: true }],
+      write: [{ role: "Storage Blob Data Contributor", principalRef: "azurerm_mssql_server.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Write audit logs and VA results", required: true }],
+      notes: "Required when azurerm_mssql_server_extended_auditing_policy or azurerm_mssql_server_vulnerability_assessment target a storage account.",
+    },
+  },
+
+  azurerm_data_factory: {
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Secrets User", principalRef: "azurerm_data_factory.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Read secrets used in linked service connections", required: true }],
+      write: [{ role: "Key Vault Secrets Officer", principalRef: "azurerm_data_factory.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Create and update secrets" }],
+    },
+    azurerm_storage_account: {
+      read: [{ role: "Storage Blob Data Reader", principalRef: "azurerm_data_factory.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read data from source datasets" }],
+      write: [{ role: "Storage Blob Data Contributor", principalRef: "azurerm_data_factory.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read and write data for sink datasets" }],
+    },
+  },
+
+  azurerm_container_registry: {
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Crypto Service Encryption User", principalRef: "azurerm_container_registry.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Customer-managed key (CMK) encryption — requires Premium SKU", required: true }],
+      write: [{ role: "Key Vault Crypto Service Encryption User", principalRef: "azurerm_container_registry.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "CMK encryption", required: true }],
+      notes: "Use a user-assigned identity to avoid a circular dependency between the registry and the key vault. Assign the role before creating the registry.",
+    },
+  },
+
+  azurerm_linux_virtual_machine: {
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Secrets User", principalRef: "azurerm_linux_virtual_machine.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Read secrets from Key Vault via VM extension or application code" }],
+      write: [{ role: "Key Vault Secrets Officer", principalRef: "azurerm_linux_virtual_machine.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Create and update secrets" }],
+    },
+    azurerm_storage_account: {
+      read: [{ role: "Storage Blob Data Reader", principalRef: "azurerm_linux_virtual_machine.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read blobs" }],
+      write: [{ role: "Storage Blob Data Contributor", principalRef: "azurerm_linux_virtual_machine.CONSUMER.identity[0].principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read and write blobs" }],
+    },
+  },
+
+  azurerm_user_assigned_identity: {
+    azurerm_key_vault: {
+      read: [{ role: "Key Vault Secrets User", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Read secrets — attach this identity to the resource needing access" }],
+      write: [{ role: "Key Vault Secrets Officer", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_key_vault.TARGET.id", description: "Create and update secrets" }],
+    },
+    azurerm_storage_account: {
+      read: [{ role: "Storage Blob Data Reader", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read blobs" }],
+      write: [{ role: "Storage Blob Data Contributor", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_storage_account.TARGET.id", description: "Read and write blobs" }],
+    },
+    azurerm_container_registry: {
+      read: [{ role: "AcrPull", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_container_registry.TARGET.id", description: "Pull images — use for AKS workload identity or CI pipelines" }],
+      write: [{ role: "AcrPush", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_container_registry.TARGET.id", description: "Push and pull images" }],
+    },
+    azurerm_eventhub_namespace: {
+      read: [{ role: "Azure Event Hubs Data Receiver", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Receive events" }],
+      write: [
+        { role: "Azure Event Hubs Data Sender",   principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Send events" },
+        { role: "Azure Event Hubs Data Receiver", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_eventhub_namespace.TARGET.id", description: "Receive events" },
+      ],
+    },
+    azurerm_servicebus_namespace: {
+      read: [{ role: "Azure Service Bus Data Receiver", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Receive messages" }],
+      write: [
+        { role: "Azure Service Bus Data Sender",   principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Send messages" },
+        { role: "Azure Service Bus Data Receiver", principalRef: "azurerm_user_assigned_identity.CONSUMER.principal_id", scopeRef: "azurerm_servicebus_namespace.TARGET.id", description: "Receive messages" },
+      ],
+    },
+  },
+};
+
 // ─── Required Tags ────────────────────────────────────────────────────────────
 
 const REQUIRED_TAG_KEYS = ["environment", "project", "cost_center", "owner"];
@@ -566,6 +740,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["resource_type"],
       },
     },
+    {
+      name: "get_required_permissions",
+      description:
+        "Return the exact azurerm_role_assignment HCL needed for one Azure resource to access another using managed identity. Covers App Service, Function Apps, AKS, SQL Server, Data Factory, Container Registry, VMs, and user-assigned identities.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          consumer_type: {
+            type: "string",
+            description: "Terraform type of the resource that needs access (e.g. azurerm_linux_web_app)",
+          },
+          consumer_name: {
+            type: "string",
+            description: "Terraform resource name of the consumer as it appears in the resource block (e.g. 'api')",
+          },
+          target_type: {
+            type: "string",
+            description: "Terraform type of the resource being accessed (e.g. azurerm_key_vault)",
+          },
+          target_name: {
+            type: "string",
+            description: "Terraform resource name of the target as it appears in the resource block (e.g. 'app_secrets')",
+          },
+          access_level: {
+            type: "string",
+            enum: ["read", "write"],
+            description: "Access level required. Defaults to 'read' (least privilege). Use 'write' when the consumer needs to create or modify data.",
+          },
+        },
+        required: ["consumer_type", "consumer_name", "target_type", "target_name"],
+      },
+    },
   ],
 }));
 
@@ -586,6 +792,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_secure_template":
       return handleGetTemplate(args as { resource_type: string });
+
+    case "get_required_permissions":
+      return handleGetRequiredPermissions(
+        args as {
+          consumer_type: string;
+          consumer_name: string;
+          target_type: string;
+          target_name: string;
+          access_level?: "read" | "write";
+        }
+      );
 
     default:
       return {
@@ -762,6 +979,73 @@ function handleGetTemplate(args: { resource_type: string }) {
         text: `Secure template for ${args.resource_type}:\n\n\`\`\`hcl\n${template}\n\`\`\`\n\nThis template follows team security standards. Review all variables and adjust for your specific use case. Run validate_azure_naming on the name and validate_required_tags on the tags block before finalising.`,
       },
     ],
+  };
+}
+
+function handleGetRequiredPermissions(args: {
+  consumer_type: string;
+  consumer_name: string;
+  target_type: string;
+  target_name: string;
+  access_level?: "read" | "write";
+}) {
+  const canonicalConsumer = CONSUMER_ALIASES[args.consumer_type] ?? args.consumer_type;
+  const consumerPatterns = PERMISSION_PATTERNS[canonicalConsumer];
+
+  if (!consumerPatterns) {
+    const supported = Object.keys(PERMISSION_PATTERNS).join(", ");
+    return {
+      content: [{
+        type: "text",
+        text: `No permission patterns for "${args.consumer_type}".\n\nSupported consumer types: ${supported}`,
+      }],
+    };
+  }
+
+  const pattern = consumerPatterns[args.target_type];
+
+  if (!pattern) {
+    const supported = Object.keys(consumerPatterns).join(", ");
+    return {
+      content: [{
+        type: "text",
+        text: `No permission patterns for "${args.consumer_type}" → "${args.target_type}".\n\nFor this consumer, supported target types: ${supported}`,
+      }],
+    };
+  }
+
+  const level = args.access_level ?? "read";
+  const roles = pattern[level];
+
+  if (roles.length === 0) {
+    const notes = pattern.notes ? `\n\n${pattern.notes}` : "";
+    return {
+      content: [{
+        type: "text",
+        text: `No RBAC role assignments apply for "${args.consumer_type}" → "${args.target_type}" (${level}).${notes}`,
+      }],
+    };
+  }
+
+  const toSlug = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+
+  const blocks = roles.map((entry) => {
+    const resourceLabel = `${toSlug(args.consumer_name)}_${toSlug(args.target_name)}_${toSlug(entry.role)}`;
+    const principal = entry.principalRef.replace(/CONSUMER/g, args.consumer_name);
+    const scope = entry.scopeRef.replace(/TARGET/g, args.target_name);
+    const requiredMarker = entry.required ? "  # REQUIRED — missing this will cause a runtime failure\n" : "";
+    return `${requiredMarker}resource "azurerm_role_assignment" "${resourceLabel}" {\n  scope                = ${scope}\n  role_definition_name = "${entry.role}"\n  principal_id         = ${principal}\n  description          = "${entry.description}"\n}`;
+  });
+
+  const header = `# ${args.consumer_type}.${args.consumer_name} → ${args.target_type}.${args.target_name} (${level})`;
+  const notesSection = pattern.notes ? `\n\n⚠️  ${pattern.notes}` : "";
+
+  return {
+    content: [{
+      type: "text",
+      text: `${header}\n\n\`\`\`hcl\n${blocks.join("\n\n")}\n\`\`\`${notesSection}`,
+    }],
   };
 }
 
